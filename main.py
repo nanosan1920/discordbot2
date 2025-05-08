@@ -2,7 +2,6 @@ import discord
 from discord.ext import commands, tasks
 import datetime
 import json
-import asyncio
 import os
 
 intents = discord.Intents.default()
@@ -28,25 +27,9 @@ def load_voice_durations():
     except FileNotFoundError:
         voice_durations = {}
 
-def get_today():
-    return datetime.datetime.now().date()
-
-def get_week_start():
-    today = get_today()
-    return today - datetime.timedelta(days=today.weekday())
-
-def get_month_start():
-    now = datetime.datetime.now()
-    return datetime.date(now.year, now.month, 1)
-
-def get_year_start():
-    now = datetime.datetime.now()
-    return datetime.date(now.year, 1, 1)
-
 @bot.event
 async def on_ready():
-    print(f"✅ Bot is ready. Logged in as: {bot.user} (ID: {bot.user.id})")
-    print(f"✅ Connected to {len(bot.guilds)} guild(s).")
+    print(f"✅ Bot is ready. Logged in as: {bot.user}")
     load_voice_durations()
     if not monthly_ranking_loop.is_running():
         monthly_ranking_loop.start()
@@ -68,7 +51,9 @@ async def on_voice_state_update(member, before, after):
 
 def update_voice_duration(user_id, duration):
     if user_id not in voice_durations:
-        voice_durations[user_id] = {"total": 0, "本日": 0, "week": 0, "month": 0, "year": 0}
+        voice_durations[user_id] = {
+            "total": 0, "本日": 0, "week": 0, "month": 0, "year": 0
+        }
     voice_durations[user_id]["total"] += duration
     voice_durations[user_id]["本日"] += duration
     voice_durations[user_id]["week"] += duration
@@ -79,11 +64,14 @@ def update_voice_duration(user_id, duration):
 async def send_time_report(ctx, key, label):
     lines = []
     for user_id, durations in voice_durations.items():
+        seconds = durations.get(key, 0)
+        if seconds == 0:
+            continue  # 0秒はスキップ
         member = ctx.guild.get_member(int(user_id))
         name = member.display_name if member else f"ID: {user_id}"
-        seconds = durations.get(key, 0)
         minutes = int(seconds // 60)
         lines.append(f"{name}: {minutes}分")
+
     if lines:
         await ctx.send(f"**{label} 通話時間:**\n" + "\n".join(lines))
     else:
@@ -128,19 +116,25 @@ async def yearly_ranking_loop():
         save_voice_durations()
 
 async def post_ranking(key, title):
-    ranking = sorted(voice_durations.items(), key=lambda x: x[1].get(key, 0), reverse=True)
+    ranking = sorted(
+        [(uid, d[key]) for uid, d in voice_durations.items() if d.get(key, 0) > 0],
+        key=lambda x: x[1],
+        reverse=True
+    )
     if not ranking:
         return
+
     report_lines = [f"📊 **{title}** 📊"]
-    for i, (user_id, durations) in enumerate(ranking, start=1):
+    for i, (user_id, seconds) in enumerate(ranking, start=1):
         member = None
         for guild in bot.guilds:
             member = guild.get_member(int(user_id))
             if member:
                 break
         name = member.display_name if member else f"ID: {user_id}"
-        minutes = int(durations.get(key, 0) // 60)
+        minutes = int(seconds // 60)
         report_lines.append(f"{i}. {name} - {minutes}分")
+
     for guild in bot.guilds:
         for channel in guild.text_channels:
             try:
@@ -162,5 +156,5 @@ async def on_command_error(ctx, error):
     await ctx.send(f"⚠ エラー: {str(error)}")
     print(f"エラー: {str(error)}")
 
-# 環境変数からトークンを取得して起動
+# ボット起動
 bot.run(os.getenv("DISCORD_TOKEN"))
