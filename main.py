@@ -43,17 +43,15 @@ def get_year_start():
     now = datetime.datetime.now()
     return datetime.date(now.year, 1, 1)
 
-last_reset_day = get_today()
-last_reset_week = get_week_start()
-last_reset_month = get_month_start()
-last_reset_year = get_year_start()
-
 @bot.event
 async def on_ready():
-    print(f"ログインしました: {bot.user}")
+    print(f"✅ Bot is ready. Logged in as: {bot.user} (ID: {bot.user.id})")
+    print(f"✅ Connected to {len(bot.guilds)} guild(s).")
     load_voice_durations()
-    monthly_ranking_loop.start()
-    yearly_ranking_loop.start()
+    if not monthly_ranking_loop.is_running():
+        monthly_ranking_loop.start()
+    if not yearly_ranking_loop.is_running():
+        yearly_ranking_loop.start()
 
 @bot.event
 async def on_voice_state_update(member, before, after):
@@ -69,11 +67,8 @@ async def on_voice_state_update(member, before, after):
             update_voice_duration(user_id, duration)
 
 def update_voice_duration(user_id, duration):
-    global voice_durations
     if user_id not in voice_durations:
-        voice_durations[user_id] = {
-            "total": 0, "本日": 0, "week": 0, "month": 0, "year": 0
-        }
+        voice_durations[user_id] = {"total": 0, "本日": 0, "week": 0, "month": 0, "year": 0}
     voice_durations[user_id]["total"] += duration
     voice_durations[user_id]["本日"] += duration
     voice_durations[user_id]["week"] += duration
@@ -117,107 +112,55 @@ async def calltime_year(ctx):
 @tasks.loop(hours=1)
 async def monthly_ranking_loop():
     now = datetime.datetime.now()
-    global last_reset_month
-
-    if now.date().month != last_reset_month.month:
-        ranking = sorted(voice_durations.items(), key=lambda x: x[1]["month"], reverse=True)
-        if not ranking:
-            return
-
-        report_lines = ["📊 **月間通話時間ランキング** 📊"]
-        for i, (user_id, durations) in enumerate(ranking, start=1):
-            member = None
-            for g in bot.guilds:
-                member = g.get_member(int(user_id))
-                if member:
-                    break
-            name = member.display_name if member else f"ID: {user_id}"
-            minutes = int(durations["month"] // 60)
-            report_lines.append(f"{i}. {name} - {minutes}分")
-
-        channel = bot.guilds[0].text_channels[0]
-        await channel.send("\n".join(report_lines))
-
+    if now.day == 1 and now.hour == 0:
+        await post_ranking("month", "月間通話時間ランキング")
         for durations in voice_durations.values():
             durations["month"] = 0
-
-        last_reset_month = now.date()
         save_voice_durations()
 
-@tasks.loop(hours=1)
+@tasks.loop(hours=6)
 async def yearly_ranking_loop():
     now = datetime.datetime.now()
-    global last_reset_year
-
-    if now.date().year != last_reset_year.year:
-        ranking = sorted(voice_durations.items(), key=lambda x: x[1]["year"], reverse=True)
-        if not ranking:
-            return
-
-        report_lines = ["🏆 **年間通話時間ランキング** 🏆"]
-        for i, (user_id, durations) in enumerate(ranking, start=1):
-            member = None
-            for g in bot.guilds:
-                member = g.get_member(int(user_id))
-                if member:
-                    break
-            name = member.display_name if member else f"ID: {user_id}"
-            minutes = int(durations["year"] // 60)
-            report_lines.append(f"{i}. {name} - {minutes}分")
-
-        channel = bot.guilds[0].text_channels[0]
-        await channel.send("\n".join(report_lines))
-
+    if now.month == 1 and now.day == 1 and now.hour == 0:
+        await post_ranking("year", "年間通話時間ランキング")
         for durations in voice_durations.values():
             durations["year"] = 0
-
-        last_reset_year = now.date()
         save_voice_durations()
 
-@bot.command()
+async def post_ranking(key, title):
+    ranking = sorted(voice_durations.items(), key=lambda x: x[1].get(key, 0), reverse=True)
+    if not ranking:
+        return
+    report_lines = [f"📊 **{title}** 📊"]
+    for i, (user_id, durations) in enumerate(ranking, start=1):
+        member = None
+        for guild in bot.guilds:
+            member = guild.get_member(int(user_id))
+            if member:
+                break
+        name = member.display_name if member else f"ID: {user_id}"
+        minutes = int(durations.get(key, 0) // 60)
+        report_lines.append(f"{i}. {name} - {minutes}分")
+    for guild in bot.guilds:
+        for channel in guild.text_channels:
+            try:
+                await channel.send("\n".join(report_lines))
+                break
+            except:
+                continue
+
+@bot.command(name="test_monthly_ranking")
 async def test_monthly_ranking(ctx):
-    ranking = sorted(voice_durations.items(), key=lambda x: x[1]["month"], reverse=True)
-    if not ranking:
-        await ctx.send("データがありません。")
-        return
+    await post_ranking("month", "月間通話時間ランキング")
 
-    report_lines = ["📊 **月間通話時間ランキング** 📊"]
-    for i, (user_id, durations) in enumerate(ranking, start=1):
-        member = None
-        for g in bot.guilds:
-            member = g.get_member(int(user_id))
-            if member:
-                break
-        name = member.display_name if member else f"ID: {user_id}"
-        minutes = int(durations["month"] // 60)
-        report_lines.append(f"{i}. {name} - {minutes}分")
-
-    await ctx.send("\n".join(report_lines))
-
-@bot.command()
+@bot.command(name="test_yearly_ranking")
 async def test_yearly_ranking(ctx):
-    ranking = sorted(voice_durations.items(), key=lambda x: x[1]["year"], reverse=True)
-    if not ranking:
-        await ctx.send("データがありません。")
-        return
-
-    report_lines = ["🏆 **年間通話時間ランキング** 🏆"]
-    for i, (user_id, durations) in enumerate(ranking, start=1):
-        member = None
-        for g in bot.guilds:
-            member = g.get_member(int(user_id))
-            if member:
-                break
-        name = member.display_name if member else f"ID: {user_id}"
-        minutes = int(durations["year"] // 60)
-        report_lines.append(f"{i}. {name} - {minutes}分")
-
-    await ctx.send("\n".join(report_lines))
+    await post_ranking("year", "年間通話時間ランキング")
 
 @bot.event
 async def on_command_error(ctx, error):
     await ctx.send(f"⚠ エラー: {str(error)}")
     print(f"エラー: {str(error)}")
 
-# ✅ 安全に環境変数からトークンを読み込み
+# 環境変数からトークンを取得して起動
 bot.run(os.getenv("DISCORD_TOKEN"))
