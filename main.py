@@ -3,32 +3,30 @@ from discord.ext import commands, tasks
 import datetime
 import json
 import asyncio
+import os
 
 intents = discord.Intents.default()
 intents.voice_states = True
 intents.guilds = True
 intents.members = True
-intents.message_content = True  # 必須！
+intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# 通話セッションと時間記録
-voice_sessions = {}  # user_id: datetime
-voice_durations = {}  # user_id: {"total": 秒, "本日": 秒, "week": 秒, "month": 秒}
+voice_sessions = {}
+voice_durations = {}
 
-# データをJSONファイルに保存する関数
 def save_voice_durations():
     with open("voice_durations.json", "w", encoding="utf-8") as f:
         json.dump(voice_durations, f, ensure_ascii=False, indent=4)
 
-# データをJSONファイルから読み込む関数
 def load_voice_durations():
     global voice_durations
     try:
         with open("voice_durations.json", "r", encoding="utf-8") as f:
             voice_durations = json.load(f)
     except FileNotFoundError:
-        voice_durations = {}  # ファイルがなかった場合、空の辞書を設定
+        voice_durations = {}
 
 def get_today():
     return datetime.datetime.now().date()
@@ -48,7 +46,7 @@ last_reset_month = get_month_start()
 @bot.event
 async def on_ready():
     print(f"ログインしました: {bot.user}")
-    load_voice_durations()  # データの読み込み
+    load_voice_durations()
     monthly_ranking_loop.start()
 
 @bot.event
@@ -56,11 +54,8 @@ async def on_voice_state_update(member, before, after):
     user_id = str(member.id)
     now = datetime.datetime.now()
 
-    # 参加時
     if before.channel is None and after.channel is not None:
         voice_sessions[user_id] = now
-
-    # 退出時
     elif before.channel is not None and after.channel is None:
         start_time = voice_sessions.pop(user_id, None)
         if start_time:
@@ -76,10 +71,8 @@ def update_voice_duration(user_id, duration):
     voice_durations[user_id]["本日"] += duration
     voice_durations[user_id]["week"] += duration
     voice_durations[user_id]["month"] += duration
+    save_voice_durations()
 
-    save_voice_durations()  # 通話時間を更新したら保存
-
-# 各種表示コマンド
 async def send_time_report(ctx, key, label):
     lines = []
     for user_id, durations in voice_durations.items():
@@ -98,7 +91,7 @@ async def calltime(ctx):
     await send_time_report(ctx, "total", "累積")
 
 @bot.command()
-async def calltime_today(ctx):  # "本日"用のコマンド
+async def calltime_today(ctx):
     await send_time_report(ctx, "本日", "本日")
 
 @bot.command()
@@ -109,15 +102,12 @@ async def calltime_week(ctx):
 async def calltime_month(ctx):
     await send_time_report(ctx, "month", "月間")
 
-# 自動ランキング投稿（月末深夜）
 @tasks.loop(hours=1)
 async def monthly_ranking_loop():
     now = datetime.datetime.now()
     global last_reset_month
 
-    # 月が変わったら処理を実行
     if now.date().month != last_reset_month.month:
-        # 通話時間の多い順にランキング
         ranking = sorted(voice_durations.items(), key=lambda x: x[1]["month"], reverse=True)
         if not ranking:
             return
@@ -134,17 +124,14 @@ async def monthly_ranking_loop():
             minutes = int(durations["month"] // 60)
             report_lines.append(f"{i}. {name} - {minutes}分")
 
-        # 最初のサーバーの最初のテキストチャンネルに送信（必要に応じて変更）
         channel = bot.guilds[0].text_channels[0]
         await channel.send("\n".join(report_lines))
 
-        # 月間データをリセット
         for durations in voice_durations.values():
             durations["month"] = 0
 
         last_reset_month = now.date()
 
-# 月間ランキングの手動表示コマンド
 @bot.command()
 async def test_monthly_ranking(ctx):
     ranking = sorted(voice_durations.items(), key=lambda x: x[1]["month"], reverse=True)
@@ -166,7 +153,6 @@ async def test_monthly_ranking(ctx):
 
     await ctx.send("\n".join(report_lines))
 
-# 年間ランキングの手動表示コマンド
 @bot.command()
 async def test_yearly_ranking(ctx):
     ranking = sorted(voice_durations.items(), key=lambda x: x[1]["month"], reverse=True)
@@ -183,16 +169,16 @@ async def test_yearly_ranking(ctx):
             if member:
                 break
         name = member.display_name if member else f"ID: {user_id}"
-        minutes = int(durations["month"] // 60)  # ここでは月間データを使っています。年間データに修正できます
+        minutes = int(durations["month"] // 60)
         report_lines.append(f"{i}. {name} - {minutes}分")
 
     await ctx.send("\n".join(report_lines))
 
-# オプション：エラー表示
 @bot.event
 async def on_command_error(ctx, error):
     await ctx.send(f"⚠ エラー: {str(error)}")
     print(f"エラー: {str(error)}")
 
-# トークン（絶対に公開しないこと）
-bot.run("TOKEN")
+# ✅ 安全に環境変数からトークンを読み込み
+bot.run(os.getenv("DISCORD_TOKEN"))
+
